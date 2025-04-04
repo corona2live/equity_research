@@ -1,858 +1,333 @@
+import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-import streamlit as st
-import os
-import json
-from io import StringIO
-import numpy as np
 
 # Set page configuration
-st.set_page_config(
-    page_title="IT Companies Financial Model",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="IT Companies Financial Model", layout="wide")
 
-# App title and description
-st.title("IT Companies Financial Model")
-st.write("This tool analyzes IT companies based on financial metrics and ranks them according to investment criteria including ROE, ROCE, free cash flow, PE ratio, and principles from Warren Buffett and Peter Lynch. Upload your company data to get started!")
-
-# Custom CSS for styling
-st.markdown("""
-<style>
-    .stSlider > div > div > div > div {
-        background-color: #FF4B4B;
-    }
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #f0f2f6;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1rem;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #e6f0ff;
-        border-bottom: 2px solid #4a76c7;
-    }
-    .upload-container {
-        border: 2px dashed #ccc;
-        border-radius: 5px;
-        padding: 20px;
-        text-align: center;
-        margin-bottom: 20px;
-    }
-    .metric-card {
-        background-color: #f9f9f9;
-        border-radius: 5px;
-        padding: 15px;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .stProgress > div > div > div > div {
-        background-color: #4a76c7;
-    }
-    footer {display: none !important;}
-    .viewerBadge_container__1QSob {display: none !important;}
-</style>
-""", unsafe_allow_html=True)
-
-# Function to normalize column values
-def normalize_column(df, column_name):
-    """Normalize column values to 0-100 scale"""
-    if column_name not in df.columns:
-        return pd.Series([0] * len(df))
-        
-    min_val = df[column_name].min()
-    max_val = df[column_name].max()
-    
-    if max_val == min_val:
-        return pd.Series([50] * len(df))  # If all values are the same
-    
-    return 100 * (df[column_name] - min_val) / (max_val - min_val)
-
-# Function to rank companies based on given weights
-def rank_companies(df, weights):
-    """Rank companies based on given weights and financial metrics"""
-    # Create copy of dataframe to avoid modifying original
-    ranked_df = df.copy()
-    
-    # Dictionary to map metrics to score columns (also handles inverted metrics where lower is better)
-    metrics_mapping = {
-        'Return_on_equity': {'score_col': 'ROE_score', 'invert': False},
-        'Debt_to_equity': {'score_col': 'DE_score', 'invert': True},
-        'Return_on_capital_employed': {'score_col': 'ROCE_score', 'invert': False},
-        'Free_cash_flow_last_year': {'score_col': 'FCF_score', 'invert': False},
-        'Price_to_Earning': {'score_col': 'PE_score', 'invert': True},
-        'OPM': {'score_col': 'OPM_score', 'invert': False}
-    }
-    
-    # Normalize all metrics
-    for metric, info in metrics_mapping.items():
-        if metric in ranked_df.columns:
-            score = normalize_column(ranked_df, metric)
-            if info['invert']:
-                score = 100 - score
-            ranked_df[info['score_col']] = score
-    
-    # Calculate overall score based on weights
-    ranked_df['Total_Score'] = 0
-    for metric, info in metrics_mapping.items():
-        if metric in weights and info['score_col'] in ranked_df.columns:
-            ranked_df['Total_Score'] += ranked_df[info['score_col']] * weights[metric]
-    
-    # Sort by total score (descending)
-    ranked_df = ranked_df.sort_values('Total_Score', ascending=False).reset_index(drop=True)
-    
-    return ranked_df
-
-# Function to create radar chart
-def create_radar_chart(df, metrics):
-    """Create a radar chart comparing top companies across metrics"""
-    # Limit to top 5 companies
-    df = df.head(5)
-    
-    # Prepare data for radar chart
-    companies = df['Name'].tolist() if 'Name' in df.columns else [f"Company {i+1}" for i in range(len(df))]
-    
-    # Normalize data for radar chart
-    radar_df = pd.DataFrame()
-    for metric in metrics:
-        if metric in df.columns:
-            values = normalize_column(df, metric)
-            # For metrics where lower is better, invert the score
-            if metric in ['Price_to_Earning', 'Debt_to_equity']:
-                values = 100 - values
-            radar_df[metric] = values
-    
-    # Number of variables
-    categories = radar_df.columns.tolist()
-    N = len(categories)
-    
-    # Create angles for each metric
-    angles = [n / float(N) * 2 * np.pi for n in range(N)]
-    angles += angles[:1]  # Close the loop
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
-    
-    # Draw one company at a time
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    for i, company in enumerate(companies):
-        values = radar_df.iloc[i].values.tolist()
-        values += values[:1]  # Close the loop
-        
-        # Plot company data
-        ax.plot(angles, values, linewidth=2, linestyle='solid', label=company, color=colors[i % len(colors)])
-        ax.fill(angles, values, alpha=0.1, color=colors[i % len(colors)])
-    
-    # Fix axis to go in the right order and start at 12 o'clock
-    ax.set_theta_offset(np.pi / 2)
-    ax.set_theta_direction(-1)
-    
-    # Draw axis lines for each angle and label
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels([c.replace('_', ' ').title() for c in categories], fontsize=12)
-    
-    # Draw y labels
-    ax.set_yticks([0, 25, 50, 75, 100])
-    ax.set_yticklabels(['0', '25', '50', '75', '100'])
-    ax.set_ylim(0, 100)
-    
-    # Add legend
-    plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
-    
-    return fig
-
-# Function to create bar charts
-def create_bar_charts(df, metrics):
-    """Create bar charts for each metric"""
-    # Limit to top 5 companies
-    top5 = df.head(5).copy()
-    
-    # Available metrics
-    available_metrics = [m for m in metrics if m in df.columns]
-    
-    if not available_metrics:
-        return None
-    
-    # Create subplots
-    fig, axes = plt.subplots(len(available_metrics), 1, figsize=(10, len(available_metrics)*3))
-    
-    if len(available_metrics) == 1:
-        axes = [axes]  # Make iterable if only one metric is available
-    
-    for i, metric in enumerate(available_metrics):
-        # Create horizontal bar chart
-        company_names = top5['Name'] if 'Name' in top5.columns else top5.index
-        ax = axes[i]
-        bars = ax.barh(company_names, top5[metric], color='#4a76c7')
-        ax.set_title(f"{metric.replace('_', ' ').title()}", fontsize=14)
-        ax.invert_yaxis()  # To have highest value at the top
-        
-        # Add value labels
-        for bar in bars:
-            width = bar.get_width()
-            label_x_pos = width + 0.01 * max(top5[metric]) if width > 0 else 0.01 * max(top5[metric])
-            ax.text(label_x_pos, bar.get_y() + bar.get_height()/2, f'{width:.2f}',
-                   va='center', fontsize=10)
-    
-    plt.tight_layout()
-    return fig
-
-# Main app function
+# Define the main function
 def main():
-    # Create two columns: left for upload and parameters, right for display
-    col1, col2 = st.columns([1, 3])
+    st.title("IT Companies Financial Model")
     
-    with col1:
-        st.header("Upload Data & Set Parameters")
-        
-        # File uploader
-        st.markdown("<div class='upload-container'>", unsafe_allow_html=True)
-        st.write("Upload CSV file with company data")
-        uploaded_file = st.file_uploader("Drag and drop file here", type=["csv"], 
-                                        help="Limit 200MB per file • CSV")
-        
-        if not uploaded_file:
-            st.button("Browse files", disabled=False)
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        # Weights sliders
-        st.header("Adjust Ranking Weights")
-        st.write("Set the importance of each factor in the ranking (total: 100%)")
-        
-        # Create sliders and store weights
-        weights = {}
-        metrics = [
-            ('Return_on_equity', 'Return on Equity'),
-            ('Debt_to_equity', 'Debt to Equity'),
-            ('Return_on_capital_employed', 'Return on Capital Employed'),
-            ('Free_cash_flow_last_year', 'Free Cash Flow'),
-            ('Price_to_Earning', 'Price to Earning'),
-            ('OPM', 'Operating Profit Margin')
-        ]
-        
-        default_weights = {
-            'Return_on_equity': 0.20,
-            'Debt_to_equity': 0.10,
-            'Return_on_capital_employed': 0.20,
-            'Free_cash_flow_last_year': 0.20,
-            'Price_to_Earning': 0.15,
-            'OPM': 0.15
-        }
-        
-        # Create sliders for each metric
-        for metric_key, metric_name in metrics:
-            weights[metric_key] = st.slider(
-                metric_name, 
-                0.0, 1.0, 
-                default_weights[metric_key], 
-                0.01, 
-                format="%.2f"
-            )
-        
-        # Calculate and display total weight
-        total_weight = sum(weights.values())
-        st.write(f"Total weight: {total_weight:.2f}")
-        
-        if abs(total_weight - 1.0) > 0.01:
-            st.warning(f"Total weight should be 1.0. Current total: {total_weight:.2f}")
+    st.markdown("""
+    This tool analyzes IT companies based on financial metrics and ranks them according to investment criteria 
+    including ROE, ROCE, free cash flow, PE ratio, and principles from Warren Buffett and Peter Lynch.
+    Upload your company data to get started!
+    """)
     
-    # Right column for results
-    with col2:
-        if uploaded_file is not None:
-            # Process the CSV file
-            try:
-                df = pd.read_csv(uploaded_file)
-                
-                # Display success message
-                st.success("File uploaded successfully!")
-                
-                # Create tabs for different views
-                tab1, tab2, tab3 = st.tabs(["📊 Overview", "�� Detailed Analysis", "📈 Visualizations"])
-                
-                with tab1:
-                    # Display the raw data
-                    st.subheader("Uploaded Company Data")
-                    st.dataframe(df)
-                    
-                    # Process and rank companies
-                    ranked_df = rank_companies(df, weights)
-                    
-                    # Display top companies
-                    st.subheader("Top Recommended Companies")
-                    st.dataframe(
-                        ranked_df[['Name', 'NSE_Code', 'Total_Score'] + 
-                                 [col for col in ranked_df.columns if col in weights.keys()]].head(5),
-                        use_container_width=True
-                    )
-                
-                with tab2:
-                    # Process and rank companies
-                    if 'ranked_df' not in locals():
-                        ranked_df = rank_companies(df, weights)
-                    
-                    # Display individual metrics
-                    st.subheader("Company Performance by Metric")
-                    
-                    # Show top 5 companies for each metric
-                    metric_cols = [col for col in df.columns if col in weights.keys()]
-                    
-                    for i, metric in enumerate(metric_cols):
-                        display_metric = metric.replace('_', ' ').title()
-                        invert = metric in ['Debt_to_equity', 'Price_to_Earning'] 
-                        
-                        # Sort based on whether higher or lower is better
-                        sorted_df = df.sort_values(by=metric, ascending=invert)
-                        
-                        # Create a metric card
-                        with st.expander(f"{display_metric}", expanded=i==0):
-                            st.dataframe(
-                                sorted_df[['Name', 'NSE_Code', metric]].head(5),
-                                use_container_width=True
-                            )
-                            
-                            # Show industry average if there are enough companies
-                            if len(df) > 1:
-                                industry_avg = df[metric].mean()
-                                st.metric(
-                                    "Industry Average", 
-                                    f"{industry_avg:.2f}", 
-                                    delta=None
-                                )
-                
-                with tab3:
-                    # Process and rank companies
-                    if 'ranked_df' not in locals():
-                        ranked_df = rank_companies(df, weights)
-                    
-                    # Create visualizations
-                    st.subheader("Financial Metrics Comparison")
-                    
-                    # Bar charts
-                    metric_cols = [col for col in df.columns if col in weights.keys()]
-                    fig_bars = create_bar_charts(ranked_df, metric_cols)
-                    if fig_bars:
-                        st.pyplot(fig_bars)
-                    
-                    # Radar chart if there are enough metrics
-                    if len(metric_cols) >= 3:
-                        st.subheader("Comparative Analysis (Radar Chart)")
-                        fig_radar = create_radar_chart(ranked_df, metric_cols)
-                        st.pyplot(fig_radar)
-                    
-                    # Total score chart
-                    st.subheader("Overall Ranking")
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    top5 = ranked_df.head(5)
-                    bars = ax.barh(top5['Name'], top5['Total_Score'], color='#4a76c7')
-                    ax.set_title("Total Score", fontsize=14)
-                    ax.invert_yaxis()
-                    
-                    # Add value labels
-                    for bar in bars:
-                        width = bar.get_width()
-                        ax.text(width + 1, bar.get_y() + bar.get_height()/2, f'{width:.2f}',
-                              va='center', fontsize=10)
-                    
-                    plt.tight_layout()
-                    st.pyplot(fig)
-                
-            except Exception as e:
-                st.error(f"Error processing file: {str(e)}")
-                st.info("Please make sure your CSV file has the required format.")
-        else:
-            # Information about required format
-            st.info("Please upload a CSV file with company financial data to begin analysis.")
+    # File upload section
+    st.header("Upload Data & Set Parameters")
+    
+    uploaded_file = st.file_uploader("Upload CSV file with company data", type=['csv'])
+    
+    if uploaded_file is not None:
+        try:
+            # Read the CSV file
+            df = pd.read_csv(uploaded_file)
             
-            # Display required CSV format
-            st.subheader("Required CSV Format")
-            st.write("Your CSV file should include the following columns:")
+            # Display the uploaded data
+            st.subheader("Uploaded Data")
+            st.dataframe(df)
             
-            requirements = [
-                "**Name**: Company name",
-                "**NSE_Code**: Stock symbol on NSE",
-                "**Return_on_equity**: ROE percentage",
-                "**Return_on_capital_employed**: ROCE percentage",
-                "**Free_cash_flow_last_year**: FCF in crores",
-                "**Price_to_Earning**: P/E ratio",
-                "**Debt_to_equity**: D/E ratio",
-                "**OPM**: Operating Profit Margin percentage"
+            # Check if required columns exist
+            required_columns = [
+                'Name', 'NSE_Code', 'Return_on_equity', 'Return_on_capital_employed',
+                'Free_cash_flow', 'Price_to_Earning', 'Debt_to_equity', 'OPM'
             ]
             
-            for req in requirements:
-                st.markdown(f"* {req}")
-                
-            # Sample data to show expected format
-            sample_data = {
-                "Name": ["Infosys", "TCS", "Wipro", "HCL Tech", "Tech Mahindra"],
-                "NSE_Code": ["INFY", "TCS", "WIPRO", "HCLTECH", "TECHM"],
-                "Return_on_equity": [24.8, 25.6, 17.2, 19.5, 15.8],
-                "Return_on_capital_employed": [29.7, 38.2, 21.5, 24.3, 18.7],
-                "Free_cash_flow_last_year": [12500, 32600, 7800, 9700, 4200],
-                "Price_to_Earning": [23.5, 27.8, 19.2, 18.7, 15.6],
-                "Debt_to_equity": [0.12, 0.08, 0.21, 0.15, 0.23],
-                "OPM": [24.5, 26.8, 18.9, 21.3, 16.7]
-            }
+            missing_columns = [col for col in required_columns if col not in df.columns]
             
-            st.subheader("Sample Data Format")
-            st.dataframe(pd.DataFrame(sample_data))
-            
-            # Download sample template
-            sample_df = pd.DataFrame(sample_data)
-            csv = sample_df.to_csv(index=False)
-            st.download_button(
-                label="Download Sample Template",
-                data=csv,
-                file_name="sample_it_companies_template.csv",
-                mime="text/csv"
-            )
+            if missing_columns:
+                st.error(f"Missing required columns: {', '.join(missing_columns)}")
+                st.info("Please ensure your CSV has the following columns: Name, NSE_Code, Return_on_equity, Return_on_capital_employed, Free_cash_flow, Price_to_Earning, Debt_to_equity, OPM")
+            else:
+                # Continue with analysis
+                analyze_data(df)
+        except Exception as e:
+            st.error(f"Error reading the file: {e}")
+    else:
+        # Show required CSV format when no file is uploaded
+        display_csv_format()
 
-# Add a footer with deployment information
-st.markdown("""
----
-Made with ❤️ by Financial Analytics Team
-""")
-
-# Run the app
-if __name__ == "__main__":
-    main()import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import streamlit as st
-import os
-import json
-from io import StringIO
-import numpy as np
-
-# Set page configuration
-st.set_page_config(
-    page_title="IT Companies Financial Model",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
-
-# App title and description
-st.title("IT Companies Financial Model")
-st.write("This tool analyzes IT companies based on financial metrics and ranks them according to investment criteria including ROE, ROCE, free cash flow, PE ratio, and principles from Warren Buffett and Peter Lynch. Upload your company data to get started!")
-
-# Custom CSS for styling
-st.markdown("""
-<style>
-    .stSlider > div > div > div > div {
-        background-color: #FF4B4B;
+# Function to display required CSV format
+def display_csv_format():
+    st.subheader("Required CSV Format")
+    st.write("Your CSV file should include the following columns:")
+    
+    format_info = [
+        {"Column": "Name", "Description": "Company name"},
+        {"Column": "NSE_Code", "Description": "Stock symbol on NSE"},
+        {"Column": "Return_on_equity", "Description": "ROE percentage"},
+        {"Column": "Return_on_capital_employed", "Description": "ROCE percentage"},
+        {"Column": "Free_cash_flow", "Description": "FCF in crores"},
+        {"Column": "Price_to_Earning", "Description": "P/E ratio"},
+        {"Column": "Debt_to_equity", "Description": "D/E ratio"},
+        {"Column": "OPM", "Description": "Operating Profit Margin percentage"}
+    ]
+    
+    st.table(pd.DataFrame(format_info))
+    
+    # Sample data
+    st.subheader("Sample Data")
+    sample_data = {
+        "Name": ["TCS", "Infosys", "Wipro"],
+        "NSE_Code": ["TCS", "INFY", "WIPRO"],
+        "Return_on_equity": [42.5, 27.8, 17.3],
+        "Return_on_capital_employed": [38.2, 33.5, 19.8],
+        "Free_cash_flow": [32500, 18700, 8900],
+        "Price_to_Earning": [28.5, 24.7, 19.2],
+        "Debt_to_equity": [0.12, 0.08, 0.31],
+        "OPM": [25.3, 24.1, 18.7]
     }
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #f0f2f6;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1rem;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #e6f0ff;
-        border-bottom: 2px solid #4a76c7;
-    }
-    .upload-container {
-        border: 2px dashed #ccc;
-        border-radius: 5px;
-        padding: 20px;
-        text-align: center;
-        margin-bottom: 20px;
-    }
-    .metric-card {
-        background-color: #f9f9f9;
-        border-radius: 5px;
-        padding: 15px;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .stProgress > div > div > div > div {
-        background-color: #4a76c7;
-    }
-    footer {display: none !important;}
-    .viewerBadge_container__1QSob {display: none !important;}
-</style>
-""", unsafe_allow_html=True)
-
-# Function to normalize column values
-def normalize_column(df, column_name):
-    """Normalize column values to 0-100 scale"""
-    if column_name not in df.columns:
-        return pd.Series([0] * len(df))
-        
-    min_val = df[column_name].min()
-    max_val = df[column_name].max()
+    st.dataframe(pd.DataFrame(sample_data))
     
-    if max_val == min_val:
-        return pd.Series([50] * len(df))  # If all values are the same
+# Function to analyze uploaded data
+def analyze_data(df):
+    st.header("Analysis & Ranking")
     
-    return 100 * (df[column_name] - min_val) / (max_val - min_val)
-
-# Function to rank companies based on given weights
-def rank_companies(df, weights):
-    """Rank companies based on given weights and financial metrics"""
-    # Create copy of dataframe to avoid modifying original
-    ranked_df = df.copy()
+    # Sidebar for weights
+    st.sidebar.header("Adjust Ranking Weights")
+    st.sidebar.write("Set the importance of each factor in the ranking (total: 100%)")
     
-    # Dictionary to map metrics to score columns (also handles inverted metrics where lower is better)
-    metrics_mapping = {
-        'Return_on_equity': {'score_col': 'ROE_score', 'invert': False},
-        'Debt_to_equity': {'score_col': 'DE_score', 'invert': True},
-        'Return_on_capital_employed': {'score_col': 'ROCE_score', 'invert': False},
-        'Free_cash_flow_last_year': {'score_col': 'FCF_score', 'invert': False},
-        'Price_to_Earning': {'score_col': 'PE_score', 'invert': True},
-        'OPM': {'score_col': 'OPM_score', 'invert': False}
-    }
+    # Get user weights
+    roe_weight = st.sidebar.slider("Return on Equity", 0.0, 0.5, 0.20, 0.01)
+    debt_equity_weight = st.sidebar.slider("Debt to Equity", 0.0, 0.5, 0.10, 0.01)
+    roce_weight = st.sidebar.slider("Return on Capital Employed", 0.0, 0.5, 0.20, 0.01)
+    profit_growth_weight = st.sidebar.slider("Profit Growth", 0.0, 0.5, 0.10, 0.01)
+    fcf_weight = st.sidebar.slider("Free Cash Flow", 0.0, 0.5, 0.20, 0.01)
+    pe_weight = st.sidebar.slider("Price to Earning", 0.0, 0.5, 0.10, 0.01)
+    opm_weight = st.sidebar.slider("Operating Profit Margin", 0.0, 0.5, 0.10, 0.01)
     
-    # Normalize all metrics
-    for metric, info in metrics_mapping.items():
-        if metric in ranked_df.columns:
-            score = normalize_column(ranked_df, metric)
-            if info['invert']:
-                score = 100 - score
-            ranked_df[info['score_col']] = score
+    # Calculate total weight
+    total_weight = round(roe_weight + debt_equity_weight + roce_weight + profit_growth_weight + 
+                          fcf_weight + pe_weight + opm_weight, 2)
     
-    # Calculate overall score based on weights
-    ranked_df['Total_Score'] = 0
-    for metric, info in metrics_mapping.items():
-        if metric in weights and info['score_col'] in ranked_df.columns:
-            ranked_df['Total_Score'] += ranked_df[info['score_col']] * weights[metric]
+    st.sidebar.write(f"Total weight: {total_weight * 100}%")
     
-    # Sort by total score (descending)
-    ranked_df = ranked_df.sort_values('Total_Score', ascending=False).reset_index(drop=True)
+    if total_weight != 1.0:
+        st.sidebar.warning("Total weight should be 100%")
     
-    return ranked_df
-
-# Function to create radar chart
-def create_radar_chart(df, metrics):
-    """Create a radar chart comparing top companies across metrics"""
-    # Limit to top 5 companies
-    df = df.head(5)
+    # Normalize the data for ranking
+    df_normalized = df.copy()
     
-    # Prepare data for radar chart
-    companies = df['Name'].tolist() if 'Name' in df.columns else [f"Company {i+1}" for i in range(len(df))]
+    # Higher is better
+    for col in ['Return_on_equity', 'Return_on_capital_employed', 'Free_cash_flow', 'OPM']:
+        if col in df.columns:
+            max_val = df[col].max()
+            min_val = df[col].min()
+            df_normalized[f'{col}_normalized'] = (df[col] - min_val) / (max_val - min_val) if max_val != min_val else 0.5
     
-    # Normalize data for radar chart
-    radar_df = pd.DataFrame()
-    for metric in metrics:
-        if metric in df.columns:
-            values = normalize_column(df, metric)
-            # For metrics where lower is better, invert the score
-            if metric in ['Price_to_Earning', 'Debt_to_equity']:
-                values = 100 - values
-            radar_df[metric] = values
+    # Lower is better
+    for col in ['Price_to_Earning', 'Debt_to_equity']:
+        if col in df.columns:
+            max_val = df[col].max()
+            min_val = df[col].min()
+            df_normalized[f'{col}_normalized'] = 1 - ((df[col] - min_val) / (max_val - min_val)) if max_val != min_val else 0.5
     
-    # Number of variables
-    categories = radar_df.columns.tolist()
-    N = len(categories)
+    # Calculate weighted score
+    df_normalized['weighted_score'] = (
+        roe_weight * df_normalized['Return_on_equity_normalized'] +
+        debt_equity_weight * df_normalized['Debt_to_equity_normalized'] +
+        roce_weight * df_normalized['Return_on_capital_employed_normalized'] +
+        fcf_weight * df_normalized['Free_cash_flow_normalized'] +
+        pe_weight * df_normalized['Price_to_Earning_normalized'] +
+        opm_weight * df_normalized['OPM_normalized']
+    )
     
-    # Create angles for each metric
-    angles = [n / float(N) * 2 * np.pi for n in range(N)]
-    angles += angles[:1]  # Close the loop
+    # Rank companies
+    df_normalized['rank'] = df_normalized['weighted_score'].rank(ascending=False)
+    df_ranked = df_normalized.sort_values('rank')
     
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
+    # Display ranked companies
+    st.subheader("Ranked Companies")
+    ranked_display = df_ranked[['Name', 'NSE_Code', 'rank', 'weighted_score']].copy()
+    ranked_display['weighted_score'] = ranked_display['weighted_score'].round(3)
+    st.dataframe(ranked_display)
     
-    # Draw one company at a time
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    for i, company in enumerate(companies):
-        values = radar_df.iloc[i].values.tolist()
-        values += values[:1]  # Close the loop
-        
-        # Plot company data
-        ax.plot(angles, values, linewidth=2, linestyle='solid', label=company, color=colors[i % len(colors)])
-        ax.fill(angles, values, alpha=0.1, color=colors[i % len(colors)])
+    # Visualizations
+    st.header("Visualizations")
     
-    # Fix axis to go in the right order and start at 12 o'clock
-    ax.set_theta_offset(np.pi / 2)
-    ax.set_theta_direction(-1)
-    
-    # Draw axis lines for each angle and label
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels([c.replace('_', ' ').title() for c in categories], fontsize=12)
-    
-    # Draw y labels
-    ax.set_yticks([0, 25, 50, 75, 100])
-    ax.set_yticklabels(['0', '25', '50', '75', '100'])
-    ax.set_ylim(0, 100)
-    
-    # Add legend
-    plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
-    
-    return fig
-
-# Function to create bar charts
-def create_bar_charts(df, metrics):
-    """Create bar charts for each metric"""
-    # Limit to top 5 companies
-    top5 = df.head(5).copy()
-    
-    # Available metrics
-    available_metrics = [m for m in metrics if m in df.columns]
-    
-    if not available_metrics:
-        return None
-    
-    # Create subplots
-    fig, axes = plt.subplots(len(available_metrics), 1, figsize=(10, len(available_metrics)*3))
-    
-    if len(available_metrics) == 1:
-        axes = [axes]  # Make iterable if only one metric is available
-    
-    for i, metric in enumerate(available_metrics):
-        # Create horizontal bar chart
-        company_names = top5['Name'] if 'Name' in top5.columns else top5.index
-        ax = axes[i]
-        bars = ax.barh(company_names, top5[metric], color='#4a76c7')
-        ax.set_title(f"{metric.replace('_', ' ').title()}", fontsize=14)
-        ax.invert_yaxis()  # To have highest value at the top
-        
-        # Add value labels
-        for bar in bars:
-            width = bar.get_width()
-            label_x_pos = width + 0.01 * max(top5[metric]) if width > 0 else 0.01 * max(top5[metric])
-            ax.text(label_x_pos, bar.get_y() + bar.get_height()/2, f'{width:.2f}',
-                   va='center', fontsize=10)
-    
-    plt.tight_layout()
-    return fig
-
-# Main app function
-def main():
-    # Create two columns: left for upload and parameters, right for display
-    col1, col2 = st.columns([1, 3])
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.header("Upload Data & Set Parameters")
-        
-        # File uploader
-        st.markdown("<div class='upload-container'>", unsafe_allow_html=True)
-        st.write("Upload CSV file with company data")
-        uploaded_file = st.file_uploader("Drag and drop file here", type=["csv"], 
-                                        help="Limit 200MB per file • CSV")
-        
-        if not uploaded_file:
-            st.button("Browse files", disabled=False)
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        # Weights sliders
-        st.header("Adjust Ranking Weights")
-        st.write("Set the importance of each factor in the ranking (total: 100%)")
-        
-        # Create sliders and store weights
-        weights = {}
-        metrics = [
-            ('Return_on_equity', 'Return on Equity'),
-            ('Debt_to_equity', 'Debt to Equity'),
-            ('Return_on_capital_employed', 'Return on Capital Employed'),
-            ('Free_cash_flow_last_year', 'Free Cash Flow'),
-            ('Price_to_Earning', 'Price to Earning'),
-            ('OPM', 'Operating Profit Margin')
-        ]
-        
-        default_weights = {
-            'Return_on_equity': 0.20,
-            'Debt_to_equity': 0.10,
-            'Return_on_capital_employed': 0.20,
-            'Free_cash_flow_last_year': 0.20,
-            'Price_to_Earning': 0.15,
-            'OPM': 0.15
-        }
-        
-        # Create sliders for each metric
-        for metric_key, metric_name in metrics:
-            weights[metric_key] = st.slider(
-                metric_name, 
-                0.0, 1.0, 
-                default_weights[metric_key], 
-                0.01, 
-                format="%.2f"
-            )
-        
-        # Calculate and display total weight
-        total_weight = sum(weights.values())
-        st.write(f"Total weight: {total_weight:.2f}")
-        
-        if abs(total_weight - 1.0) > 0.01:
-            st.warning(f"Total weight should be 1.0. Current total: {total_weight:.2f}")
+        st.subheader("Top 5 Companies by Score")
+        top_5 = df_ranked.head(5)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(x='weighted_score', y='Name', data=top_5, ax=ax)
+        ax.set_title('Top 5 Companies by Weighted Score')
+        ax.set_xlabel('Weighted Score')
+        ax.set_ylabel('Company')
+        st.pyplot(fig)
     
-    # Right column for results
     with col2:
-        if uploaded_file is not None:
-            # Process the CSV file
-            try:
-                df = pd.read_csv(uploaded_file)
-                
-                # Display success message
-                st.success("File uploaded successfully!")
-                
-                # Create tabs for different views
-                tab1, tab2, tab3 = st.tabs(["📊 Overview", "�� Detailed Analysis", "📈 Visualizations"])
-                
-                with tab1:
-                    # Display the raw data
-                    st.subheader("Uploaded Company Data")
-                    st.dataframe(df)
-                    
-                    # Process and rank companies
-                    ranked_df = rank_companies(df, weights)
-                    
-                    # Display top companies
-                    st.subheader("Top Recommended Companies")
-                    st.dataframe(
-                        ranked_df[['Name', 'NSE_Code', 'Total_Score'] + 
-                                 [col for col in ranked_df.columns if col in weights.keys()]].head(5),
-                        use_container_width=True
-                    )
-                
-                with tab2:
-                    # Process and rank companies
-                    if 'ranked_df' not in locals():
-                        ranked_df = rank_companies(df, weights)
-                    
-                    # Display individual metrics
-                    st.subheader("Company Performance by Metric")
-                    
-                    # Show top 5 companies for each metric
-                    metric_cols = [col for col in df.columns if col in weights.keys()]
-                    
-                    for i, metric in enumerate(metric_cols):
-                        display_metric = metric.replace('_', ' ').title()
-                        invert = metric in ['Debt_to_equity', 'Price_to_Earning'] 
-                        
-                        # Sort based on whether higher or lower is better
-                        sorted_df = df.sort_values(by=metric, ascending=invert)
-                        
-                        # Create a metric card
-                        with st.expander(f"{display_metric}", expanded=i==0):
-                            st.dataframe(
-                                sorted_df[['Name', 'NSE_Code', metric]].head(5),
-                                use_container_width=True
-                            )
-                            
-                            # Show industry average if there are enough companies
-                            if len(df) > 1:
-                                industry_avg = df[metric].mean()
-                                st.metric(
-                                    "Industry Average", 
-                                    f"{industry_avg:.2f}", 
-                                    delta=None
-                                )
-                
-                with tab3:
-                    # Process and rank companies
-                    if 'ranked_df' not in locals():
-                        ranked_df = rank_companies(df, weights)
-                    
-                    # Create visualizations
-                    st.subheader("Financial Metrics Comparison")
-                    
-                    # Bar charts
-                    metric_cols = [col for col in df.columns if col in weights.keys()]
-                    fig_bars = create_bar_charts(ranked_df, metric_cols)
-                    if fig_bars:
-                        st.pyplot(fig_bars)
-                    
-                    # Radar chart if there are enough metrics
-                    if len(metric_cols) >= 3:
-                        st.subheader("Comparative Analysis (Radar Chart)")
-                        fig_radar = create_radar_chart(ranked_df, metric_cols)
-                        st.pyplot(fig_radar)
-                    
-                    # Total score chart
-                    st.subheader("Overall Ranking")
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    top5 = ranked_df.head(5)
-                    bars = ax.barh(top5['Name'], top5['Total_Score'], color='#4a76c7')
-                    ax.set_title("Total Score", fontsize=14)
-                    ax.invert_yaxis()
-                    
-                    # Add value labels
-                    for bar in bars:
-                        width = bar.get_width()
-                        ax.text(width + 1, bar.get_y() + bar.get_height()/2, f'{width:.2f}',
-                              va='center', fontsize=10)
-                    
-                    plt.tight_layout()
-                    st.pyplot(fig)
-                
-            except Exception as e:
-                st.error(f"Error processing file: {str(e)}")
-                st.info("Please make sure your CSV file has the required format.")
-        else:
-            # Information about required format
-            st.info("Please upload a CSV file with company financial data to begin analysis.")
+        st.subheader("Return on Equity vs ROCE")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.scatterplot(x='Return_on_equity', y='Return_on_capital_employed', 
+                        size='Free_cash_flow', hue='Debt_to_equity',
+                        sizes=(50, 400), data=df, ax=ax)
+        for i, row in df.iterrows():
+            ax.text(row['Return_on_equity'], row['Return_on_capital_employed'], row['Name'], 
+                   fontsize=9)
+        ax.set_title('ROE vs ROCE (Size: FCF, Color: Debt/Equity)')
+        ax.set_xlabel('Return on Equity (%)')
+        ax.set_ylabel('Return on Capital Employed (%)')
+        st.pyplot(fig)
+    
+    # Financial Metrics Comparison
+    st.subheader("Financial Metrics Comparison")
+    
+    # Select companies to compare
+    companies_to_compare = st.multiselect(
+        "Select companies to compare",
+        options=df['Name'].tolist(),
+        default=df_ranked['Name'].head(3).tolist()
+    )
+    
+    if companies_to_compare:
+        comparison_df = df[df['Name'].isin(companies_to_compare)]
+        
+        # Radar chart
+        st.subheader("Financial Metrics Radar Chart")
+        
+        # Prepare data for radar chart
+        metrics = ['Return_on_equity', 'Return_on_capital_employed', 'OPM', 
+                  'Free_cash_flow', 'Price_to_Earning', 'Debt_to_equity']
+        
+        # Normalize data for radar chart
+        radar_df = comparison_df.copy()
+        for metric in metrics:
+            max_val = df[metric].max()
+            min_val = df[metric].min()
             
-            # Display required CSV format
-            st.subheader("Required CSV Format")
-            st.write("Your CSV file should include the following columns:")
-            
-            requirements = [
-                "**Name**: Company name",
-                "**NSE_Code**: Stock symbol on NSE",
-                "**Return_on_equity**: ROE percentage",
-                "**Return_on_capital_employed**: ROCE percentage",
-                "**Free_cash_flow_last_year**: FCF in crores",
-                "**Price_to_Earning**: P/E ratio",
-                "**Debt_to_equity**: D/E ratio",
-                "**OPM**: Operating Profit Margin percentage"
+            # For metrics where higher is better
+            if metric in ['Return_on_equity', 'Return_on_capital_employed', 'OPM', 'Free_cash_flow']:
+                radar_df[f'{metric}_norm'] = (radar_df[metric] - min_val) / (max_val - min_val) if max_val != min_val else 0.5
+            # For metrics where lower is better
+            else:
+                radar_df[f'{metric}_norm'] = 1 - ((radar_df[metric] - min_val) / (max_val - min_val)) if max_val != min_val else 0.5
+        
+        # Create radar chart
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111, polar=True)
+        
+        # Number of variables
+        categories = ['ROE', 'ROCE', 'OPM', 'FCF', 'P/E', 'D/E']
+        N = len(categories)
+        
+        # What will be the angle of each axis in the plot
+        angles = [n / float(N) * 2 * np.pi for n in range(N)]
+        angles += angles[:1]  # Close the loop
+        
+        # Draw one axis per variable and add labels
+        plt.xticks(angles[:-1], categories)
+        
+        # Draw the chart for each company
+        for i, company in enumerate(radar_df['Name']):
+            values = [
+                radar_df.loc[radar_df['Name'] == company, 'Return_on_equity_norm'].values[0],
+                radar_df.loc[radar_df['Name'] == company, 'Return_on_capital_employed_norm'].values[0],
+                radar_df.loc[radar_df['Name'] == company, 'OPM_norm'].values[0],
+                radar_df.loc[radar_df['Name'] == company, 'Free_cash_flow_norm'].values[0],
+                radar_df.loc[radar_df['Name'] == company, 'Price_to_Earning_norm'].values[0],
+                radar_df.loc[radar_df['Name'] == company, 'Debt_to_equity_norm'].values[0]
             ]
+            values += values[:1]  # Close the loop
             
-            for req in requirements:
-                st.markdown(f"* {req}")
-                
-            # Sample data to show expected format
-            sample_data = {
-                "Name": ["Infosys", "TCS", "Wipro", "HCL Tech", "Tech Mahindra"],
-                "NSE_Code": ["INFY", "TCS", "WIPRO", "HCLTECH", "TECHM"],
-                "Return_on_equity": [24.8, 25.6, 17.2, 19.5, 15.8],
-                "Return_on_capital_employed": [29.7, 38.2, 21.5, 24.3, 18.7],
-                "Free_cash_flow_last_year": [12500, 32600, 7800, 9700, 4200],
-                "Price_to_Earning": [23.5, 27.8, 19.2, 18.7, 15.6],
-                "Debt_to_equity": [0.12, 0.08, 0.21, 0.15, 0.23],
-                "OPM": [24.5, 26.8, 18.9, 21.3, 16.7]
-            }
+            ax.plot(angles, values, linewidth=2, linestyle='solid', label=company)
+            ax.fill(angles, values, alpha=0.1)
+        
+        # Add legend
+        plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+        
+        st.pyplot(fig)
+        
+        # Bar chart comparison
+        st.subheader("Key Metrics Comparison")
+        
+        metric_to_compare = st.selectbox(
+            "Select metric to compare",
+            options=['Return_on_equity', 'Return_on_capital_employed', 'Free_cash_flow', 
+                    'Price_to_Earning', 'Debt_to_equity', 'OPM']
+        )
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(x='Name', y=metric_to_compare, data=comparison_df, ax=ax)
+        ax.set_title(f'Comparison of {metric_to_compare}')
+        ax.set_xlabel('Company')
+        ax.set_ylabel(metric_to_compare)
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
+    
+    # Investment Recommendations
+    st.header("Investment Recommendations")
+    
+    # Get top companies
+    top_companies = df_ranked.head(3)
+    
+    for idx, row in top_companies.iterrows():
+        st.subheader(f"{int(row['rank'])}. {row['Name']} ({row['NSE_Code']})")
+        
+        # Calculate strengths and weaknesses
+        strengths = []
+        weaknesses = []
+        
+        if row['Return_on_equity'] > df['Return_on_equity'].median():
+            strengths.append(f"Strong ROE of {row['Return_on_equity']}%")
+        else:
+            weaknesses.append(f"Below average ROE of {row['Return_on_equity']}%")
             
-            st.subheader("Sample Data Format")
-            st.dataframe(pd.DataFrame(sample_data))
+        if row['Return_on_capital_employed'] > df['Return_on_capital_employed'].median():
+            strengths.append(f"High ROCE of {row['Return_on_capital_employed']}%")
+        else:
+            weaknesses.append(f"Below average ROCE of {row['Return_on_capital_employed']}%")
             
-            # Download sample template
-            sample_df = pd.DataFrame(sample_data)
-            csv = sample_df.to_csv(index=False)
-            st.download_button(
-                label="Download Sample Template",
-                data=csv,
-                file_name="sample_it_companies_template.csv",
-                mime="text/csv"
-            )
+        if row['Debt_to_equity'] < df['Debt_to_equity'].median():
+            strengths.append(f"Low debt-to-equity ratio of {row['Debt_to_equity']}")
+        else:
+            weaknesses.append(f"High debt-to-equity ratio of {row['Debt_to_equity']}")
+            
+        if row['Price_to_Earning'] < df['Price_to_Earning'].median():
+            strengths.append(f"Attractive P/E ratio of {row['Price_to_Earning']}")
+        else:
+            weaknesses.append(f"High P/E ratio of {row['Price_to_Earning']}")
+            
+        if row['Free_cash_flow'] > df['Free_cash_flow'].median():
+            strengths.append(f"Strong free cash flow of {row['Free_cash_flow']} crores")
+        else:
+            weaknesses.append(f"Below average free cash flow of {row['Free_cash_flow']} crores")
+            
+        if row['OPM'] > df['OPM'].median():
+            strengths.append(f"Good operating profit margin of {row['OPM']}%")
+        else:
+            weaknesses.append(f"Below average operating profit margin of {row['OPM']}%")
+        
+        # Display strengths and weaknesses
+        st.write("**Strengths:**")
+        for strength in strengths:
+            st.write(f"- {strength}")
+            
+        st.write("**Weaknesses:**")
+        for weakness in weaknesses:
+            st.write(f"- {weakness}")
+        
+        # Investment thesis
+        st.write("**Investment Thesis:**")
+        if len(strengths) > len(weaknesses):
+            st.write(f"{row['Name']} shows strong financial performance across key metrics, particularly in {', '.join(strengths[:2])}. With a weighted score of {row['weighted_score']:.3f}, it ranks {int(row['rank'])} among the analyzed companies. Based on Warren Buffett's principles of investing in companies with strong fundamentals, {row['Name']} appears to be a solid investment candidate.")
+        else:
+            st.write(f"Despite ranking {int(row['rank'])} with a weighted score of {row['weighted_score']:.3f}, {row['Name']} has some concerning metrics, particularly {', '.join(weaknesses[:2])}. While it shows strength in {', '.join(strengths[:1]) if strengths else 'few areas'}, potential investors should carefully consider these weaknesses before investing.")
+        
+        st.write("---")
 
-# Add a footer with deployment information
-st.markdown("""
----
-Made with ❤️ by Financial Analytics Team
-""")
+    # Disclaimer
+    st.header("Disclaimer")
+    st.write("""
+    This analysis is for informational purposes only and does not constitute investment advice. 
+    The rankings are based on the provided data and the weightings assigned to different metrics.
+    Always conduct thorough research and consult with a financial advisor before making investment decisions.
+    """)
 
 # Run the app
 if __name__ == "__main__":
